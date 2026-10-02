@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: mon-ia-v1-2
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: META_GRAPH_VERSION
+        value: v23.0
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_AUTO_REPLY
+        value: "false"
+      - key: MESSENGER_PAGE_ID
+        sync: false
+      - key: MESSENGER_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: MESSENGER_VERIFY_TOKEN
+        sync: false
+      - key: MESSENGER_APP_SECRET
+        sync: false
+      - key: MESSENGER_AUTO_REPLY
+        value: "false"

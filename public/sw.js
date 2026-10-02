@@ -1,0 +1,1 @@
+const CACHE='mon-ia-v1-2';self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/style.css','/script.js','/manifest.webmanifest','/assets/steve-logo.png']))));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request).catch(()=>caches.match(e.request))));
