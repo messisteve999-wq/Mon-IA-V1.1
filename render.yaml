@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: mon-ia-v1-2
+    name: mon-ia-v3
     runtime: node
     plan: free
     buildCommand: npm install
@@ -10,7 +10,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash-lite
+        value: gemini-3.5-flash-lite
       - key: META_GRAPH_VERSION
         value: v23.0
       - key: WHATSAPP_PHONE_NUMBER_ID
@@ -23,13 +23,5 @@ services:
         sync: false
       - key: WHATSAPP_AUTO_REPLY
         value: "false"
-      - key: MESSENGER_PAGE_ID
+      - key: DASHBOARD_ACCESS_KEY
         sync: false
-      - key: MESSENGER_PAGE_ACCESS_TOKEN
-        sync: false
-      - key: MESSENGER_VERIFY_TOKEN
-        sync: false
-      - key: MESSENGER_APP_SECRET
-        sync: false
-      - key: MESSENGER_AUTO_REPLY
-        value: "false"
