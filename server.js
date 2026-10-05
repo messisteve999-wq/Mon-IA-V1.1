@@ -1,79 +1,50 @@
 require("dotenv").config();
-const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const crypto = require("crypto");
 const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const GRAPH = process.env.META_GRAPH_VERSION || "v23.0";
+const WA_VERSION = process.env.WHATSAPP_API_VERSION || "v23.0";
+const WA_PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || "";
+const WA_VERIFY = process.env.WHATSAPP_VERIFY_TOKEN || "";
+const WA_APP_SECRET = process.env.WHATSAPP_APP_SECRET || "";
+const WA_AUTO = String(process.env.WHATSAPP_AUTO_REPLY || "false").toLowerCase() === "true";
+
 app.use(cors());
-app.use(express.json({limit:"1mb", verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf)}}));
+app.use(express.json({limit:"1mb", verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 app.use(express.static(path.join(__dirname,"public")));
 
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY}) : null;
-const chats = new Map();
-const processed = new Set();
-const enabled = v => ["1","true","yes","on"].includes(String(v||"").toLowerCase());
-const autoReply = () => enabled(process.env.WHATSAPP_AUTO_REPLY);
-const whatsappReady = () => !!(process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_VERIFY_TOKEN);
+function cleanJson(text){const value=String(text||"").trim();const match=value.match(/\{[\s\S]*\}/);return match?match[0]:value;}
+async function askGemini(prompt){if(!ai) throw new Error("GEMINI_API_KEY manquante");const result=await ai.models.generateContent({model:MODEL,contents:prompt});return result.text||"";}
 
-function getChat(id) {
-  if (!chats.has(id)) chats.set(id,{id,name:id,platform:"WhatsApp",messages:[],updatedAt:new Date().toISOString()});
-  return chats.get(id);
+async function generateReply({conversation,goal="répondre naturellement",tone="naturel",language="français"}){
+ if(!conversation||!String(conversation).trim()) throw new Error("Conversation vide.");
+ const prompt=`Tu es Mon IA, un assistant de conversation.\nRéponds en ${language}. Ton: ${tone}. Objectif: ${goal}.\nContexte: ${conversation}\n\nProduis une réponse naturelle, courte et adaptée au contexte, sans manipulation, pression, mensonge, harcèlement ou spam. Si la personne refuse ou pose une limite, respecte-la. Pour une conversation de flirt, reste léger, respectueux et réciproque. Ne prétends jamais être l'utilisateur et n'invente pas de faits.\n\nRetourne UNIQUEMENT ce JSON valide:\n{"reply":"réponse principale","alternatives":["alternative 1","alternative 2"],"followUp":"question ou relance naturelle","reason":"courte explication du choix"}`;
+ const raw=await askGemini(prompt);try{return JSON.parse(cleanJson(raw));}catch{return{reply:raw,alternatives:[],followUp:"",reason:"Réponse générée par Gemini."};}
 }
-function auth(req,res,next) {
-  const key=process.env.DASHBOARD_ACCESS_KEY;
-  if(!key) return res.status(503).json({success:false,error:"Configure DASHBOARD_ACCESS_KEY dans Render."});
-  if(req.get("x-dashboard-key")!==key) return res.status(401).json({success:false,error:"Clé du tableau de bord incorrecte."});
-  next();
-}
-function verifySignature(req) {
-  const secret=process.env.WHATSAPP_APP_SECRET;
-  if(!secret) return true;
-  const header=req.get("x-hub-signature-256")||"";
-  if(!header.startsWith("sha256=")) return false;
-  const expected="sha256="+crypto.createHmac("sha256",secret).update(req.rawBody||Buffer.alloc(0)).digest("hex");
-  try { return crypto.timingSafeEqual(Buffer.from(header),Buffer.from(expected)); } catch { return false; }
-}
-async function askGemini(prompt) {
-  if(!ai) throw new Error("GEMINI_API_KEY manquante");
-  const result=await ai.models.generateContent({model:MODEL,contents:prompt});
-  return result.text||"";
-}
-function jsonFrom(text) {
-  const match=String(text||"").match(/\{[\s\S]*\}/);
-  return match?match[0]:String(text||"");
-}
-async function generateReply(conversation,tone="naturel") {
-  const prompt=`Tu es Steve, l'assistant conversationnel de Mon IA. Réponds en français, naturellement et avec concision. Ton: ${tone}. Tiens compte du contexte. Respecte les limites de l'interlocuteur. Ne manipule pas, ne harcèle pas, ne mens pas et ne spamme pas.
-Retourne uniquement ce JSON valide: {"reply":"...","followUp":"...","topics":["...","..."],"reason":"..."}
-Conversation:\n${conversation}`;
-  const raw=await askGemini(prompt);
-  try { return JSON.parse(jsonFrom(raw)); }
-  catch { return {reply:raw,followUp:"",topics:[],reason:"Réponse générée par Gemini."}; }
-}
-async function sendWhatsApp(to,body) {
-  const url=`https://graph.facebook.com/${GRAPH}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  const response=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,"Content-Type":"application/json"},body:JSON.stringify({messaging_product:"whatsapp",recipient_type:"individual",to,type:"text",text:{body:String(body).slice(0,4096)}})});
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok) throw new Error(data.error?.message||`Erreur WhatsApp ${response.status}`);
-  return data;
-}
+function waConfigured(){return Boolean(WA_PHONE_ID&&WA_TOKEN&&WA_VERIFY);}
+function verifySignature(req){if(!WA_APP_SECRET)return true;const sig=req.get("x-hub-signature-256")||"";if(!sig.startsWith("sha256=")||!req.rawBody)return false;const expected="sha256="+crypto.createHmac("sha256",WA_APP_SECRET).update(req.rawBody).digest("hex");try{return crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected));}catch{return false;}}
+async function sendWhatsAppText(to,body){if(!waConfigured())throw new Error("WhatsApp Cloud API non configurée.");const r=await fetch(`https://graph.facebook.com/${WA_VERSION}/${WA_PHONE_ID}/messages`,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${WA_TOKEN}`},body:JSON.stringify({messaging_product:"whatsapp",recipient_type:"individual",to,type:"text",text:{body:String(body).slice(0,4096)}})});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(`WhatsApp API: ${data?.error?.message||`HTTP ${r.status}`}`);return data;}
+const seen=new Set();
+async function processWebhook(payload){for(const entry of (payload?.entry||[])){for(const change of (entry?.changes||[])){if(change?.field!=="messages")continue;for(const message of (change?.value?.messages||[])){const id=message?.id;if(!id||seen.has(id))continue;seen.add(id);if(message?.type!=="text"||!message?.text?.body||!message?.from)continue;try{const result=await generateReply({conversation:`Message reçu sur WhatsApp:\n"${message.text.body}"`,goal:"répondre directement au message WhatsApp de façon utile et naturelle",tone:"naturel, amical et respectueux",language:"français"});if(WA_AUTO){await sendWhatsAppText(message.from,result.reply);console.log(`[WhatsApp] Réponse automatique envoyée à ${message.from}`);}else{console.log(`[WhatsApp] Suggestion pour ${message.from}: ${result.reply}`);}}catch(e){console.error("[WhatsApp] Traitement impossible:",e.message);}}}}}
 
-app.get("/api/health",(req,res)=>res.json({ok:true,app:"Mon IA",version:"3.0.0",provider:ai?"gemini":"not-configured",model:MODEL,whatsapp:whatsappReady()?"configured":"not-configured",autoReply:autoReply(),dashboardKeyRequired:true}));
-app.get("/api/whatsapp/status",(req,res)=>res.json({configured:whatsappReady(),autoReply:autoReply(),phoneNumberIdConfigured:!!process.env.WHATSAPP_PHONE_NUMBER_ID,accessTokenConfigured:!!process.env.WHATSAPP_ACCESS_TOKEN,verifyTokenConfigured:!!process.env.WHATSAPP_VERIFY_TOKEN,appSecretConfigured:!!process.env.WHATSAPP_APP_SECRET}));
-app.post("/api/ai/reply",async(req,res)=>{try{const result=await generateReply(req.body?.conversation||"",req.body?.tone||"naturel");res.json({success:true,...result});}catch(e){res.status(500).json({success:false,error:e.message});}});
+app.get("/api/health",(req,res)=>res.json({ok:true,app:"Mon IA",version:"1.1.0",provider:ai?"gemini":"not-configured",model:MODEL,whatsapp:waConfigured()?"configured":"not-configured",whatsappAutoReply:WA_AUTO}));
+app.get("/api/connectors",(req,res)=>res.json({success:true,connectors:[{id:"whatsapp",name:"WhatsApp",status:waConfigured()?"connecté":"à configurer",mode:WA_AUTO?"réponse automatique":"suggestions"},{id:"messenger",name:"Messenger",status:"préparation"},{id:"instagram",name:"Instagram",status:"préparation"},{id:"snapchat",name:"Snapchat",status:"préparation"}],note:"WhatsApp utilise l'API Cloud officielle de Meta et un webhook sécurisé."}));
 
-app.get("/api/chats",auth,(req,res)=>res.json({success:true,chats:[...chats.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).map(c=>({...c,lastMessage:c.messages.at(-1)?.text||""}))}));
-app.get("/api/chats/:id",auth,(req,res)=>{const c=chats.get(req.params.id);if(!c)return res.status(404).json({success:false,error:"Conversation introuvable"});res.json({success:true,chat:c});});
-app.post("/api/chats/:id/suggest",auth,async(req,res)=>{try{const c=chats.get(req.params.id);if(!c)return res.status(404).json({success:false,error:"Conversation introuvable"});const context=c.messages.slice(-20).map(m=>(m.direction==="in"?"Contact":"Steve")+": "+m.text).join("\n");const result=await generateReply(context,req.body?.tone||"naturel");res.json({success:true,...result});}catch(e){res.status(500).json({success:false,error:e.message});}});
-app.post("/api/chats/:id/send",auth,async(req,res)=>{try{const c=chats.get(req.params.id);if(!c)return res.status(404).json({success:false,error:"Conversation introuvable"});const body=String(req.body?.text||"").trim();if(!body)return res.status(400).json({success:false,error:"Message vide"});if(!whatsappReady())return res.status(400).json({success:false,error:"WhatsApp n'est pas configuré"});const sent=await sendWhatsApp(c.id,body);const message={id:sent.messages?.[0]?.id||crypto.randomUUID(),direction:"out",text:body,time:new Date().toISOString(),status:"sent"};c.messages.push(message);c.updatedAt=message.time;res.json({success:true,message});}catch(e){res.status(502).json({success:false,error:e.message});}});
+app.get("/webhook/whatsapp",(req,res)=>{const mode=req.query["hub.mode"],token=req.query["hub.verify_token"],challenge=req.query["hub.challenge"];if(mode==="subscribe"&&WA_VERIFY&&token===WA_VERIFY)return res.status(200).send(String(challenge||""));return res.sendStatus(403);});
+app.post("/webhook/whatsapp",async(req,res)=>{if(!verifySignature(req))return res.sendStatus(401);res.sendStatus(200);if(req.body?.object==="whatsapp_business_account")await processWebhook(req.body);});
+app.get("/api/whatsapp/status",(req,res)=>res.json({success:true,configured:waConfigured(),apiVersion:WA_VERSION,phoneNumberIdConfigured:Boolean(WA_PHONE_ID),accessTokenConfigured:Boolean(WA_TOKEN),verifyTokenConfigured:Boolean(WA_VERIFY),appSecretConfigured:Boolean(WA_APP_SECRET),autoReply:WA_AUTO}));
 
-app.get("/api/whatsapp/webhook",(req,res)=>{const q=req.query;if(q["hub.mode"]==="subscribe"&&q["hub.verify_token"]===process.env.WHATSAPP_VERIFY_TOKEN&&q["hub.challenge"])return res.status(200).send(q["hub.challenge"]);res.sendStatus(403);});
-app.post("/api/whatsapp/webhook",(req,res)=>{if(!verifySignature(req))return res.sendStatus(403);res.sendStatus(200);(async()=>{for(const entry of req.body.entry||[])for(const change of entry.changes||[])for(const msg of change.value?.messages||[]){if(!msg.id||processed.has(msg.id)||msg.type!=="text")continue;processed.add(msg.id);const c=getChat(msg.from);const incoming={id:msg.id,direction:"in",text:msg.text?.body||"",time:new Date().toISOString(),status:"received"};c.messages.push(incoming);c.updatedAt=incoming.time;if(autoReply()&&ai&&whatsappReady()){const context=c.messages.slice(-20).map(m=>(m.direction==="in"?"Contact":"Steve")+": "+m.text).join("\n");const answer=await generateReply(context);const sent=await sendWhatsApp(msg.from,answer.reply);const outgoing={id:sent.messages?.[0]?.id||crypto.randomUUID(),direction:"out",text:answer.reply,time:new Date().toISOString(),status:"sent"};c.messages.push(outgoing);c.updatedAt=outgoing.time;}}})().catch(e=>console.error("Webhook WhatsApp:",e.message));});
-
+app.post("/api/ai/reply",async(req,res)=>{try{const{conversation="",goal="répondre naturellement",tone="naturel",language="français",automatic=false}=req.body||{};const data=await generateReply({conversation,goal,tone,language});res.json({success:true,provider:"gemini",model:MODEL,automatic:!!automatic,...data});}catch(e){res.status(500).json({success:false,error:e.message||"Erreur Gemini"});}});
+app.post("/api/ai/suggestions",async(req,res)=>{try{const{conversation="",tone="naturel",language="français"}=req.body||{};const data=await generateReply({conversation,goal:"proposer une réponse que l'utilisateur peut choisir avant envoi",tone,language});res.json({success:true,provider:"gemini",model:MODEL,automatic:false,...data});}catch(e){res.status(500).json({success:false,error:e.message||"Erreur Gemini"});}});
+app.post("/api/ai/topics",async(req,res)=>{try{const{interests="",language="français"}=req.body||{};const raw=await askGemini(`Tu es Mon IA. Génère 5 sujets de conversation différents pour aujourd'hui en ${language}. Ils doivent aider deux personnes à mieux se connaître naturellement: goûts, musique, projets, souvenirs, voyages, humour ou valeurs. ${interests?"Centres d'intérêt explicitement mentionnés: "+interests:""} Ne déduis aucune information sensible. Retourne UNIQUEMENT un JSON valide: {"topics":["sujet 1","sujet 2","sujet 3","sujet 4","sujet 5"],"tip":"un conseil court"}`);let data;try{data=JSON.parse(cleanJson(raw));}catch{data={topics:[raw],tip:""};}res.json({success:true,provider:"gemini",model:MODEL,...data});}catch(e){res.status(500).json({success:false,error:e.message||"Erreur Gemini"});}});
+app.post("/api/ai/profile",async(req,res)=>{try{const{conversation="",language="français"}=req.body||{};if(!conversation.trim())return res.status(400).json({success:false,error:"Conversation vide."});const raw=await askGemini(`Analyse uniquement les informations EXPLICITEMENT dites dans cette conversation. Langue de sortie: ${language}. Ne devine pas l'âge, la religion, la santé, l'origine, l'orientation, les opinions politiques ou tout autre attribut sensible. Donne des questions ouvertes pour mieux connaître la personne. Retourne UNIQUEMENT: {"interests":[],"knownFacts":[],"questionsToAsk":[]}\nConversation:\n${conversation}`);let data;try{data=JSON.parse(cleanJson(raw));}catch{data={interests:[],knownFacts:[],questionsToAsk:[raw]};}res.json({success:true,provider:"gemini",...data});}catch(e){res.status(500).json({success:false,error:e.message||"Erreur Gemini"});}});
 app.get("*",(req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-app.listen(PORT,()=>console.log(`Mon IA V3 démarré sur le port ${PORT}`));
+app.listen(PORT,()=>console.log(`Mon IA V1.1 démarré sur le port ${PORT}`));
+
