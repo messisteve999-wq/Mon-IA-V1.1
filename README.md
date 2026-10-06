@@ -1,4 +1,4 @@
-# Mon IA V1.2 — Steve
+# Mon IA V4 — Steve
 
 Assistant conversationnel Gemini avec architecture de connecteurs officiels.
 

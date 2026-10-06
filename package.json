@@ -1,7 +1,7 @@
 {
-  "name": "mon-ia-v3",
+  "name": "mon-ia-v4",
   "version": "3.0.0",
-  "description": "Mon IA V3 - tableau de conversations WhatsApp avec Gemini",
+  "description": "Mon IA V4 - tableau de conversations WhatsApp avec Gemini",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

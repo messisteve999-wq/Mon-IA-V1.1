@@ -1,4 +1,4 @@
-# Mise à jour WhatsApp Cloud + Gemini pour Mon IA V1.1
+# Mise à jour WhatsApp Cloud + Gemini pour Mon IA V4
 
 Remplacez `server.js`, `.env.example` et `render.yaml` de votre projet actuel par ceux de ce dossier.
 
